@@ -2,7 +2,7 @@ services:
   - type: web
     name: ecommerce-api
     runtime: docker
-    rootDir: backend
+    rootDir: ecommerce-fullstack/backend
     plan: free
     healthCheckPath: /health
     envVars:
