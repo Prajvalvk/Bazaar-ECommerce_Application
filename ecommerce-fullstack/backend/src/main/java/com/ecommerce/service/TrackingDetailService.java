@@ -18,6 +18,13 @@ public class TrackingDetailService {
     private final OrderService orders;
 
     private static String norm(String s) { return s.trim().toUpperCase().replaceAll("\\s+", "_"); }
+    private static void validateCoordinates(Double latitude, Double longitude) {
+        if (latitude == null && longitude == null) return;
+        if (latitude == null || longitude == null) throw ApiException.badRequest("latitude and longitude must be provided together");
+        if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+            throw ApiException.badRequest("Invalid delivery coordinates");
+        }
+    }
 
     @Transactional
     public TrackingDetail create(TrackingDetail t) {
@@ -26,6 +33,7 @@ public class TrackingDetailService {
         t.setTrackingId(null);
         t.setOrder(o);
         t.setStatus(norm(t.getStatus()));
+        validateCoordinates(t.getLatitude(), t.getLongitude());
         TrackingDetail saved = repo.save(t);
         orders.setStatus(o.getOrderNo(), saved.getStatus());
         return saved;
@@ -41,6 +49,9 @@ public class TrackingDetailService {
     public TrackingDetail update(Long id, TrackingDetail in) {
         TrackingDetail t = get(id);
         t.setStatus(norm(in.getStatus()));
+        validateCoordinates(in.getLatitude(), in.getLongitude());
+        t.setLatitude(in.getLatitude());
+        t.setLongitude(in.getLongitude());
         TrackingDetail saved = repo.save(t);
         orders.setStatus(saved.getOrder().getOrderNo(), saved.getStatus());
         return saved;

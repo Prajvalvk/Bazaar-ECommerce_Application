@@ -16,6 +16,10 @@ public class Product {
     @NotNull(message = "price is required") @PositiveOrZero(message = "price cannot be negative")
     private Double price;
     @Column(length = 1000) private String description;
+    @Column(length = 2000) private String imageUrl;
+    @NotNull(message = "quantity is required") @Min(value = 0, message = "quantity cannot be negative")
+    private Integer quantity = 0;
+    private String quantityUnit = "Pieces";
     @Enumerated(EnumType.STRING)
     private ProductStatus status = ProductStatus.ACTIVE;
     @ManyToOne @JoinColumn(name = "category_id")

@@ -13,6 +13,12 @@ import org.springframework.web.bind.annotation.*;
 @RequiredArgsConstructor
 public class PaymentController {
     private final PaymentService service;
+    private final StripePaymentService stripePayments;
+
+    @PostMapping("/google-pay/intent")
+    public ResponseEntity<Map<String, String>> createGooglePayIntent(@RequestAttribute("authUser") User me) {
+        return ResponseEntity.ok(stripePayments.createGooglePayIntent(me.getUserId()));
+    }
 
     @PostMapping
     public ResponseEntity<Payment> create(@Valid @RequestBody Payment body) {

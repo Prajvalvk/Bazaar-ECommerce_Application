@@ -27,6 +27,11 @@ public class OrderService {
     /** Create an order from selected products (productId + quantity). */
     @Transactional
     public Order place(User me, Long addressId, String paymentMethod, List<OrderItemRequest> reqs) {
+        return place(me, addressId, paymentMethod, reqs, null, null);
+    }
+
+    @Transactional
+    public Order place(User me, Long addressId, String paymentMethod, List<OrderItemRequest> reqs, String upiId, String paymentReference) {
         if (paymentMethod == null || paymentMethod.isBlank()) throw ApiException.badRequest("paymentMethod is required");
         if (addressId == null) throw ApiException.badRequest("addressId is required");
         Address addr = addresses.getOwned(me, addressId);
@@ -36,10 +41,42 @@ public class OrderService {
         o.setOrderDate(LocalDate.now());
         o.setStatus(PLACED);
         fillItems(o, reqs);
+        decrementStock(o);
+        if ("UPI".equalsIgnoreCase(paymentMethod.trim())) {
+            if (upiId == null || !upiId.trim().matches("^[\\w.-]+@[\\w.-]+$")) throw ApiException.badRequest("A valid UPI ID is required for UPI payment");
+            if (paymentReference == null || paymentReference.trim().isEmpty()) throw ApiException.badRequest("paymentReference is required for UPI payment");
+        }
         o = repo.save(o);
-        paymentRepo.save(new Payment(null, paymentMethod.trim(), o.getOrderAmount(), me, o));
+        Payment payment = new Payment();
+        payment.setMethod(paymentMethod.trim());
+        payment.setAmount(o.getOrderAmount());
+        payment.setUser(me);
+        payment.setOrder(o);
+        payment.setUpiId(upiId == null ? null : upiId.trim());
+        payment.setPaymentReference(paymentReference == null ? null : paymentReference.trim());
+        paymentRepo.save(payment);
         trackingRepo.save(new TrackingDetail(null, PLACED, o));
         return o;
+    }
+
+    private void decrementStock(Order o) {
+        for (OrderItem item : o.getItems()) {
+            Product p = item.getProduct();
+            p.setQuantity(p.getQuantity() - item.getQuantity());
+            if ((p.getQuantity() == null || p.getQuantity() < 1) && p.getStatus() != ProductStatus.INACTIVE) {
+                p.setStatus(ProductStatus.OUT_OF_STOCK);
+            }
+        }
+    }
+
+    private void restock(Order o) {
+        for (OrderItem item : o.getItems()) {
+            Product p = item.getProduct();
+            p.setQuantity((p.getQuantity() == null ? 0 : p.getQuantity()) + item.getQuantity());
+            if (p.getQuantity() > 0 && p.getStatus() == ProductStatus.OUT_OF_STOCK) {
+                p.setStatus(ProductStatus.ACTIVE);
+            }
+        }
     }
 
     private void fillItems(Order o, List<OrderItemRequest> reqs) {
@@ -56,6 +93,7 @@ public class OrderService {
         for (Map.Entry<Long, Integer> e : merged.entrySet()) {
             Product p = products.get(e.getKey());
             if (p.getStatus() != ProductStatus.ACTIVE) throw ApiException.badRequest(p.getName() + " is not available right now");
+            if (p.getQuantity() == null || p.getQuantity() < e.getValue()) throw ApiException.badRequest("Only " + (p.getQuantity() == null ? 0 : p.getQuantity()) + " of " + p.getName() + " are available");
             o.getItems().add(new OrderItem(null, o, p, e.getValue(), p.getPrice()));
             total += p.getPrice() * e.getValue();
         }
@@ -81,7 +119,9 @@ public class OrderService {
         if (r.addressId() != null) o.setShippingAddress(addresses.getOwned(o.getUser(), r.addressId()));
         List<Payment> pays = paymentRepo.findByOrderOrderNo(id);
         if (r.items() != null && !r.items().isEmpty()) {
+            restock(o);
             fillItems(o, r.items());
+            decrementStock(o);
             for (Payment p : pays) p.setAmount(o.getOrderAmount());
         }
         if (r.paymentMethod() != null && !r.paymentMethod().isBlank()) {
@@ -98,6 +138,7 @@ public class OrderService {
         if (!admin(me) && !PLACED.equals(statusOf(o))) {
             throw ApiException.conflict("This order is already being processed and can no longer be cancelled");
         }
+        restock(o);
         trackingRepo.deleteByOrderOrderNo(id);
         paymentRepo.deleteByOrderOrderNo(id);
         repo.delete(o);

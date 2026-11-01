@@ -20,11 +20,22 @@ public class ProductService {
 
     private static boolean admin(User u) { return u != null && u.getRole() == Role.ADMIN; }
     private static boolean visible(Product p) { return p.getStatus() != ProductStatus.INACTIVE; }
+    private static void normalizeStatus(Product p) {
+        ProductStatus current = p.getStatus();
+        if (current == ProductStatus.INACTIVE) return;
+        if (p.getQuantity() == null || p.getQuantity() < 1) {
+            p.setStatus(ProductStatus.OUT_OF_STOCK);
+        }
+    }
 
     @Transactional
     public Product create(Product p) {
         p.setProductId(null);
         p.setStatus(p.getStatus());
+        if (p.getQuantity() == null) p.setQuantity(0);
+        if (p.getQuantityUnit() == null || p.getQuantityUnit().trim().isEmpty()) p.setQuantityUnit("Pieces");
+        if (p.getImageUrl() != null && p.getImageUrl().trim().isEmpty()) p.setImageUrl(null);
+        normalizeStatus(p);
         p.setCategory(resolveCategory(p.getCategory()));
         return repo.save(p);
     }
@@ -48,13 +59,20 @@ public class ProductService {
     public Product update(Long id, Product in) {
         Product p = get(id);
         p.setName(in.getName()); p.setPrice(in.getPrice()); p.setDescription(in.getDescription());
+        p.setQuantity(in.getQuantity() == null ? 0 : in.getQuantity());
+        p.setQuantityUnit(in.getQuantityUnit() == null || in.getQuantityUnit().trim().isEmpty() ? "Pieces" : in.getQuantityUnit().trim());
         p.setStatus(in.getStatus());
+        p.setImageUrl(in.getImageUrl() == null || in.getImageUrl().trim().isEmpty() ? null : in.getImageUrl().trim());
+        normalizeStatus(p);
         p.setCategory(resolveCategory(in.getCategory()));
         return repo.save(p);
     }
     @Transactional
     public Product setStatus(Long id, ProductStatus status) {
         Product p = get(id);
+        if (status == ProductStatus.ACTIVE && (p.getQuantity() == null || p.getQuantity() < 1)) {
+            throw ApiException.badRequest("Set the quantity above 0 before marking this product Active");
+        }
         p.setStatus(status);
         return repo.save(p);
     }

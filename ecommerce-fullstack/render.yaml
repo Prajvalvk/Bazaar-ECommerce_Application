@@ -16,6 +16,10 @@ services:
         generateValue: true
       - key: ADMIN_SIGNUP_CODE
         sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
 databases:
   - name: ecommerce-db
     plan: free

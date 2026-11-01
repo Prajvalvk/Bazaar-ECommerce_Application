@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { api, configured, setToken, getToken, setAuthFailHandler } from './api.js';
 import './styles.css';
 
@@ -21,6 +21,10 @@ function Tile({ p }) {
   const [bg, fg, ink] = PAL[id % PAL.length];
   const shape = id % 4;
   const letter = (p.name || '?').trim().charAt(0).toUpperCase();
+  const [imageFailed, setImageFailed] = useState(false);
+  if (p.imageUrl && /^https?:\/\//i.test(p.imageUrl.trim())) {
+    if (!imageFailed) return <img className="tile product-image" src={p.imageUrl.trim()} alt={p.name || 'Product'} loading="lazy" decoding="async" width="200" height="170" onError={() => setImageFailed(true)} />;
+  }
   return (
     <svg className="tile" viewBox="0 0 200 170" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
       <rect width="200" height="170" fill={bg} />
@@ -46,11 +50,25 @@ function useEsc(fn) {
 
 function Modal({ title, onClose, children, wide }) {
   useEsc(onClose);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const startDrag = (e) => {
+    if (e.button !== 0) return;
+    e.preventTargetDefault?.();
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    const startX = e.clientX - offset.x;
+    const startY = e.clientY - offset.y;
+    setDragging(true);
+    const move = (event) => setOffset({ x: event.clientX - startX, y: event.clientY - startY });
+    const stop = () => { setDragging(false); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+  };
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={'modal' + (wide ? ' wide' : '')} role="dialog" aria-modal="true" aria-label={title}>
+      <div className={'modal' + (wide ? ' wide' : '') + (dragging ? ' dragging' : '')} style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }} role="dialog" aria-modal="true" aria-label={title}>
         <button className="x" onClick={onClose} aria-label="Close">×</button>
-        <h2>{title}</h2>
+        <h2 className="drag-handle" onPointerDown={startDrag}>{title}</h2>
         {children}
       </div>
     </div>
@@ -130,14 +148,26 @@ function CartDrawer({ cart, setCart, onClose, say, goOrders }) {
   const [addresses, setAddresses] = useState([]);
   const [addrId, setAddrId] = useState('');
   const [pay, setPay] = useState('UPI');
+  const [upiId, setUpiId] = useState('');
+  const [upiLaunched, setUpiLaunched] = useState(false);
+  const [paymentReference, setPaymentReference] = useState('');
+  const [drawerOffset, setDrawerOffset] = useState({ x: 0, y: 0 });
+  const [drawerDragging, setDrawerDragging] = useState(false);
   const [newAddr, setNewAddr] = useState({ city: '', state: '', country: 'India' });
   const [showNew, setShowNew] = useState(false);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [placed, setPlaced] = useState(null);
+  const [googlePayIntent, setGooglePayIntent] = useState(null);
+  const [googlePayReady, setGooglePayReady] = useState(false);
   const items = cart?.items || [];
   const total = items.reduce((s, i) => s + i.product.price * i.quantity, 0);
   useEsc(onClose);
+  useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previous; };
+  }, []);
 
   const change = async (item, qty) => { try { setCart(await api.put('/cart/update', { productId: item.product.productId, quantity: qty })); } catch (e) { say(e.message); } };
   const remove = async (item) => { try { setCart(await api.del('/cart/remove/' + item.product.productId)); } catch (e) { say(e.message); } };
@@ -159,18 +189,84 @@ function CartDrawer({ cart, setCart, onClose, say, goOrders }) {
   }
   async function placeOrder() {
     if (!addrId) { setErr('Choose or add a delivery address.'); return; }
+    if (pay === 'UPI') {
+      if (!/^[\w.-]+@[\w.-]+$/.test(upiId)) { setErr('Enter a valid UPI ID, for example name@bank.'); return; }
+      if (!upiLaunched) { launchUpi(); return; }
+      if (!paymentReference.trim()) { setErr('Enter the UPI transaction reference/UTR after payment.'); return; }
+    }
     setErr(''); setBusy(true);
     try {
-      const o = await api.post('/checkout', { addressId: Number(addrId), paymentMethod: pay });
+      if (pay === 'Google Pay' && !googlePayIntent) { setErr('Complete payment with Google Pay before placing the order.'); return; }
+      const o = await api.post('/checkout', { addressId: Number(addrId), paymentMethod: pay, upiId: pay === 'UPI' ? upiId.trim() : null, paymentReference: pay === 'UPI' ? paymentReference.trim() : null, paymentIntentId: pay === 'Google Pay' ? googlePayIntent : null });
       setPlaced(o); setCart({ ...cart, items: [] }); setStep('done');
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+  async function launchGooglePay() {
+    setErr('');
+    setBusy(true);
+    try {
+      if (!window.Stripe) {
+        await new Promise((resolve, reject) => {
+          const existing = document.querySelector('script[data-stripe-js]');
+          if (existing) { existing.addEventListener('load', resolve, { once: true }); existing.addEventListener('error', reject, { once: true }); return; }
+          const script = document.createElement('script');
+          script.src = 'https://js.stripe.com/v3/';
+          script.async = true;
+          script.dataset.stripeJs = 'true';
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+      const setup = await api.post('/payments/google-pay/intent');
+      const stripe = window.Stripe(setup.publishableKey);
+      const pr = stripe.paymentRequest({
+        country: 'IN',
+        currency: 'inr',
+        total: { label: 'Bazaar order', amount: Number(setup.amount) },
+        requestPayerName: true,
+        requestPayerEmail: true
+      });
+      const available = await pr.canMakePayment();
+      if (!available || !available.googlePay) { setErr('Google Pay is not available in this browser or region.'); return; }
+      pr.on('paymentmethod', async (event) => {
+        const result = await stripe.confirmCardPayment(setup.clientSecret, { payment_method: event.paymentMethod.id }, { handleActions: false });
+        if (result.error) { event.complete('fail'); setErr(result.error.message || 'Google Pay payment failed.'); return; }
+        event.complete('success');
+        const confirmation = await stripe.retrievePaymentIntent(setup.clientSecret);
+        if (confirmation.paymentIntent?.status === 'succeeded') {
+          setGooglePayIntent(setup.paymentIntentId);
+          setGooglePayReady(true);
+          say('Google Pay payment completed');
+        } else setErr('Google Pay payment is still processing.');
+      });
+      await pr.show();
+    } catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+  function startDrawerDrag(e) {
+    if (e.button !== 0) return;
+    const startX = e.clientX - drawerOffset.x;
+    const startY = e.clientY - drawerOffset.y;
+    setDrawerDragging(true);
+    const move = (event) => setDrawerOffset({ x: event.clientX - startX, y: event.clientY - startY });
+    const stop = () => { setDrawerDragging(false); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+  }
+  function launchUpi() {
+    if (!/^[\w.-]+@[\w.-]+$/.test(upiId)) { setErr('Enter a valid UPI ID, for example name@bank.'); return; }
+    setErr('');
+    const params = new URLSearchParams({ pa: upiId.trim(), pn: 'Bazaar Store', am: total.toFixed(2), cu: 'INR', tn: 'Bazaar order payment' });
+    setUpiLaunched(true);
+    window.location.href = 'upi://pay?' + params.toString();
   }
 
   return (
     <div className="overlay drawer-wrap" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <aside className="drawer" role="dialog" aria-modal="true" aria-label="Your cart">
+      <aside className={'drawer' + (drawerDragging ? ' dragging' : '')} style={{ transform: `translate(${drawerOffset.x}px, ${drawerOffset.y}px)` }} role="dialog" aria-modal="true" aria-label="Your cart">
         <header className="drawer-head">
-          <h2>{step === 'cart' ? 'Your cart' : step === 'checkout' ? 'Checkout' : 'Order placed'}</h2>
+          <h2 className="drag-handle" onPointerDown={startDrawerDrag}>{step === 'cart' ? 'Your cart' : step === 'checkout' ? 'Checkout' : 'Order placed'}</h2>
           <button className="x static" onClick={onClose} aria-label="Close cart">×</button>
         </header>
         {step === 'cart' && (<>
@@ -184,7 +280,7 @@ function CartDrawer({ cart, setCart, onClose, say, goOrders }) {
                   <span className="muted">{money(i.product.price)} each</span>
                   <div className="qty">
                     <button onClick={() => change(i, i.quantity - 1)} aria-label={`Decrease ${i.product.name}`}>−</button>
-                    <span>{i.quantity}</span>
+                    <span>{i.quantity} {i.product.quantityUnit || 'Pieces'}</span>
                     <button onClick={() => change(i, i.quantity + 1)} aria-label={`Increase ${i.product.name}`}>+</button>
                     <button className="link danger" onClick={() => remove(i)}>Remove</button>
                   </div>
@@ -217,15 +313,27 @@ function CartDrawer({ cart, setCart, onClose, say, goOrders }) {
             ) : <button className="link" onClick={() => setShowNew(true)}>Add a new address</button>}
             <h3>Payment method</h3>
             <div className="pay">
-              {['UPI', 'Card', 'Net banking', 'Cash on delivery'].map((m) => (
-                <button key={m} type="button" className={'chip' + (pay === m ? ' on' : '')} onClick={() => setPay(m)}>{m}</button>
+              {['UPI', 'Google Pay', 'Card', 'Net banking', 'Cash on delivery'].map((m) => (
+                <button key={m} type="button" className={'chip' + (pay === m ? ' on' : '')} onClick={() => { setPay(m); setErr(''); }}>{m}</button>
               ))}
             </div>
-            {err && <p className="err" role="alert">{err}</p>}
-          </div>
+            {pay === 'UPI' && <div className="stack box">
+              <Field label="Your UPI ID"><input required inputMode="email" placeholder="name@bank" value={upiId} onChange={(e) => { setUpiId(e.target.value); setUpiLaunched(false); }} /></Field>
+              {!upiLaunched ? <button type="button" className="btn sun wide" disabled={!upiId} onClick={launchUpi}>Open UPI app and pay</button> : <>
+                <p className="muted small">Complete the payment in your UPI app, then enter the transaction reference shown by the app.</p>
+                <Field label="Transaction reference / UTR"><input required value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} /></Field>
+              </>}
+            </div>}
+            {pay === 'Google Pay' && <div className="stack box">
+              <p className="muted small">Stripe securely handles the Google Pay transaction. Your card details are not stored by Bazaar.</p>
+              <button type="button" className="btn dark wide" disabled={busy || googlePayReady} onClick={launchGooglePay}>
+                {googlePayReady ? '✓ Google Pay payment completed' : busy ? 'Opening Google Pay…' : 'Pay with Google Pay'}
+              </button>
+            </div>}
+            {err && <p className="err" role="alert">{err}</p>}          </div>
           <footer className="drawer-foot">
             <div className="sum"><span>Total</span><strong>{money(total)}</strong></div>
-            <button className="btn primary wide" disabled={busy} onClick={placeOrder}>{busy ? 'Placing order…' : `Pay ${money(total)}`}</button>
+            <button className="btn primary wide" disabled={busy || (pay === 'UPI' && !upiLaunched) || (pay === 'Google Pay' && !googlePayReady)} onClick={placeOrder}>{busy ? 'Processing…' : pay === 'UPI' && upiLaunched ? 'Confirm payment and place order' : pay === 'Google Pay' && googlePayReady ? 'Place paid order' : `Pay ${money(total)}`}</button>
             <button className="link center" onClick={() => setStep('cart')}>Back to cart</button>
           </footer>
         </>)}
@@ -246,9 +354,10 @@ function CartDrawer({ cart, setCart, onClose, say, goOrders }) {
 function Shop({ products, cats, loading, slow, err, retry, addToCart, buyNow }) {
   const [q, setQ] = useState('');
   const [cat, setCat] = useState(0);
+  const deferredQ = useDeferredValue(q);
   const list = useMemo(() => products.filter((p) =>
     (!cat || p.category?.categoryId === cat) &&
-    (!q || (p.name + ' ' + (p.description || '')).toLowerCase().includes(q.toLowerCase()))), [products, cat, q]);
+    (!deferredQ || (p.name + ' ' + (p.description || '')).toLowerCase().includes(deferredQ.toLowerCase()))), [products, cat, deferredQ]);
   return (
     <main>
       <section className="hero">
@@ -269,7 +378,8 @@ function Shop({ products, cats, loading, slow, err, retry, addToCart, buyNow }) 
         )}
         <div className="grid">
           {list.map((p) => {
-            const out = p.status !== 'ACTIVE';
+            const status = String(p.status || 'ACTIVE').toUpperCase();
+            const out = status !== 'ACTIVE' || Number(p.quantity ?? 0) < 1;
             return (
               <article className={'card' + (out ? ' soldout' : '')} key={p.productId}>
                 <div className="media"><Tile p={p} /><span className="price">{money(p.price)}</span>{out && <span className="ribbon">Out of stock</span>}</div>
@@ -277,6 +387,7 @@ function Shop({ products, cats, loading, slow, err, retry, addToCart, buyNow }) 
                   <span className="muted small">{p.category?.name || 'Uncategorised'}</span>
                   <h3>{p.name}</h3>
                   <p className="desc">{p.description || 'No description yet.'}</p>
+                  {!out && <p className="muted small">Available: {p.quantity ?? 0} {p.quantityUnit || 'Pieces'}</p>}
                   <div className="btnrow tight">
                     <button className="btn primary grow" disabled={out} onClick={() => buyNow(p)}>{out ? 'Out of stock' : 'Order now'}</button>
                     {!out && <button className="btn ghost" onClick={() => addToCart(p)} aria-label={`Add ${p.name} to cart`}>+ Cart</button>}
@@ -336,6 +447,57 @@ function OrderEdit({ order, onClose, onSaved, say }) {
   );
 }
 
+function DeliveryMap({ orderNo, poll = true }) {
+  const mapRef = React.useRef(null);
+  const mapInstance = React.useRef(null);
+  const marker = React.useRef(null);
+  const [tracking, setTracking] = React.useState([]);
+  const [mapReady, setMapReady] = React.useState(Boolean(window.google?.maps));
+  const key = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+
+  React.useEffect(() => {
+    const load = async () => {
+      try {
+        setTracking(await api.get('/tracking/' + orderNo));
+      } catch {
+        setTracking([]);
+      }
+    };
+    load();
+    if (!poll) return undefined;
+    const timer = setInterval(load, 5000);
+    return () => clearInterval(timer);
+  }, [orderNo, poll]);
+
+  React.useEffect(() => {
+    const point = [...tracking].reverse().find((item) => item.latitude != null && item.longitude != null);
+    if (!key || !mapRef.current || !window.google?.maps || !point) return;
+    const position = { lat: Number(point.latitude), lng: Number(point.longitude) };
+    if (!mapInstance.current) {
+      mapInstance.current = new window.google.maps.Map(mapRef.current, { center: position, zoom: 14, mapTypeControl: false });
+      marker.current = new window.google.maps.Marker({ map: mapInstance.current, position, title: 'Delivery vehicle' });
+    } else {
+      marker.current?.setPosition(position);
+      mapInstance.current.panTo(position);
+    }
+  }, [tracking, key, mapReady]);
+
+  React.useEffect(() => {
+    if (!key || window.google?.maps) return undefined;
+    const script = document.createElement('script');
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}`;
+    script.async = true;
+    script.onload = () => setMapReady(true);
+    document.head.appendChild(script);
+    return undefined;
+  }, [key]);
+
+  const point = [...tracking].reverse().find((item) => item.latitude != null && item.longitude != null);
+  if (!key) return <p className="muted small">Set VITE_GOOGLE_MAPS_API_KEY to display live delivery location.</p>;
+  if (!point) return <p className="muted small">Waiting for the driver to share live location.</p>;
+  return <div ref={mapRef} className="delivery-map" aria-label={`Live delivery location for order ${orderNo}`} />;
+}
+
 function Orders({ say }) {
   const [orders, setOrders] = useState(null);
   const [err, setErr] = useState('');
@@ -358,8 +520,9 @@ function Orders({ say }) {
         return (
           <article className="order" key={o.orderNo}>
             <div className="order-head"><h3>Order {o.orderNo}</h3><span className="muted">{o.orderDate}</span><strong>{money(o.orderAmount)}</strong></div>
-            <ul className="items">{o.items.map((i) => <li key={i.id}>{i.quantity} × {i.product.name} <span className="muted">{money(i.unitPrice * i.quantity)}</span></li>)}</ul>
+            <ul className="items">{o.items.map((i) => <li key={i.id}>{i.quantity} {i.product.quantityUnit || 'Pieces'} × {i.product.name} <span className="muted">{money(i.unitPrice * i.quantity)}</span></li>)}</ul>
             {o.shippingAddress && <p className="muted small">Delivering to {o.shippingAddress.city}, {o.shippingAddress.state}, {o.shippingAddress.country}</p>}
+            <DeliveryMap orderNo={o.orderNo} />
             {idx >= 0 ? <ol className="steps">{STEPS.map((s, i) => <li key={s} className={i <= idx ? 'on' : ''}><i />{STEP_LABEL[s]}</li>)}</ol> : <span className="chip on">{stepOf(o)}</span>}
             {open ? (
               <div className="btnrow tight"><button className="btn dark" onClick={() => setEdit(o)}>Edit order</button><button className="btn ghost danger" onClick={() => cancel(o)}>Cancel order</button></div>
@@ -375,13 +538,13 @@ function Orders({ say }) {
 /* ---------- admin ---------- */
 function ProductForm({ product, cats, onClose, onSaved, say }) {
   const [p, setP] = useState({
-    name: product?.name || '', price: product?.price ?? '', description: product?.description || '',
-    categoryId: product?.category?.categoryId ? String(product.category.categoryId) : '', status: product?.status || 'ACTIVE',
+    name: product?.name || '', price: product?.price ?? '', quantity: product?.quantity ?? 0, quantityUnit: product?.quantityUnit || 'Pieces', description: product?.description || '',
+    imageUrl: product?.imageUrl || '', categoryId: product?.category?.categoryId ? String(product.category.categoryId) : '', status: String(product?.status || 'ACTIVE').toUpperCase(),
   });
   const [err, setErr] = useState('');
   async function submit(e) {
     e.preventDefault(); setErr('');
-    const body = { name: p.name, price: Number(p.price), description: p.description, status: p.status, category: p.categoryId ? { categoryId: Number(p.categoryId) } : null };
+    const body = { name: p.name, price: Number(p.price), quantity: Number(p.quantity), quantityUnit: p.quantityUnit, description: p.description, imageUrl: p.imageUrl.trim(), status: p.status, category: p.categoryId ? { categoryId: Number(p.categoryId) } : null };
     try {
       if (product) await api.put('/products/' + product.productId, body); else await api.post('/products', body);
       say(product ? 'Product updated' : 'Product added'); onSaved();
@@ -392,7 +555,14 @@ function ProductForm({ product, cats, onClose, onSaved, say }) {
       <form className="stack" onSubmit={submit}>
         <Field label="Name"><input required value={p.name} onChange={(e) => setP({ ...p, name: e.target.value })} /></Field>
         <Field label="Price (₹)"><input required type="number" min="0" step="0.01" value={p.price} onChange={(e) => setP({ ...p, price: e.target.value })} /></Field>
+        <div className="quantity-fields">
+          <Field label="Quantity"><input required type="number" min="0" step="1" value={p.quantity} onChange={(e) => setP({ ...p, quantity: e.target.value })} /></Field>
+          <Field label="Unit"><select value={p.quantityUnit} onChange={(e) => setP({ ...p, quantityUnit: e.target.value })}><option>Pieces</option><option>kg</option><option>grams</option><option>litres</option><option>packs</option><option>boxes</option><option>sets</option><option>meters</option></select></Field>
+        </div>
         <Field label="Description"><textarea rows="3" value={p.description} onChange={(e) => setP({ ...p, description: e.target.value })} /></Field>
+        <Field label="Product photo URL">
+          <input type="url" inputMode="url" placeholder="https://example.com/product-photo.jpg" value={p.imageUrl} onChange={(e) => setP({ ...p, imageUrl: e.target.value })} />
+        </Field>
         <Field label="Category">
           <select value={p.categoryId} onChange={(e) => setP({ ...p, categoryId: e.target.value })}>
             <option value="">No category</option>
@@ -448,8 +618,8 @@ function AdminProducts({ say }) {
             <div className="thumb sm"><Tile p={x} /></div>
             <div className="grow"><strong>{x.name}</strong><span className="muted small">{x.category?.name || 'Uncategorised'}</span></div>
             <strong>{money(x.price)}</strong>
-            <select className={'status s-' + x.status} value={x.status} aria-label={`Status of ${x.name}`}
-              onChange={(e) => run(() => api.put(`/products/${x.productId}/status`, { status: e.target.value }), 'Status updated')}>
+            <span className="muted small">Qty: {x.quantity ?? 0} {x.quantityUnit || 'Pieces'}</span>
+            <select className={'status s-' + String(x.status || 'ACTIVE').toUpperCase()} value={String(x.status || 'ACTIVE').toUpperCase()} aria-label={`Status of ${x.name}`} onChange={(e) => run(() => api.put(`/products/${x.productId}/status`, { status: e.target.value }), 'Status updated')}>
               {Object.entries(PSTATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
             <button className="link" onClick={() => setForm(x)}>Edit</button>
@@ -468,6 +638,24 @@ function AdminOrders({ say }) {
   const load = useCallback(async () => { try { setOrders(await api.get('/orders')); setErr(''); } catch (e) { setErr(e.message); } }, []);
   useEffect(() => { load(); }, [load]);
   const run = async (fn, ok) => { try { await fn(); say(ok); load(); } catch (e) { say(e.message); } };
+  const shareLocation = (orderNo) => {
+    if (!navigator.geolocation) { say('Location sharing is not supported by this browser'); return; }
+    navigator.geolocation.watchPosition(
+      async (position) => {
+        try {
+          await api.post('/tracking', {
+            status: stepOf(orders.find((o) => o.orderNo === orderNo) || { status: 'SHIPPED' }),
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            order: { orderNo }
+          });
+        } catch (e) { say(e.message); }
+      },
+      () => say('Allow location access to share live delivery position'),
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
+    );
+    say('Live delivery location sharing started');
+  };
   return (
     <main className="wrap page">
       <h1 className="page-title">Orders</h1>
@@ -478,14 +666,16 @@ function AdminOrders({ say }) {
         <article className="order" key={o.orderNo}>
           <div className="order-head"><h3>Order {o.orderNo}</h3><span className="muted">{o.orderDate}</span><strong>{money(o.orderAmount)}</strong></div>
           <p className="small"><strong>{o.user?.name}</strong> <span className="muted">{o.user?.email}</span></p>
-          <ul className="items">{o.items.map((i) => <li key={i.id}>{i.quantity} × {i.product.name} <span className="muted">{money(i.unitPrice * i.quantity)}</span></li>)}</ul>
+          <ul className="items">{o.items.map((i) => <li key={i.id}>{i.quantity} {i.product.quantityUnit || 'Pieces'} × {i.product.name} <span className="muted">{money(i.unitPrice * i.quantity)}</span></li>)}</ul>
           {o.shippingAddress && <p className="muted small">Ship to {o.shippingAddress.city}, {o.shippingAddress.state}, {o.shippingAddress.country}</p>}
+          <DeliveryMap orderNo={o.orderNo} />
           <div className="btnrow tight">
             <label className="inline-label">Status
               <select value={stepOf(o)} onChange={(e) => run(() => api.post('/tracking', { status: e.target.value, order: { orderNo: o.orderNo } }), 'Status updated')}>
                 {STEPS.map((s) => <option key={s} value={s}>{STEP_LABEL[s]}</option>)}
               </select>
             </label>
+            <button className="btn ghost" onClick={() => shareLocation(o.orderNo)}>Share live location</button>
             <button className="btn ghost danger" onClick={() => window.confirm(`Delete order ${o.orderNo}?`) && run(() => api.del('/orders/' + o.orderNo), 'Order deleted')}>Delete order</button>
           </div>
         </article>
@@ -539,11 +729,11 @@ export default function App() {
   const loadCatalog = useCallback(async () => {
     setLoading(true); setErr('');
     const t = setTimeout(() => setSlow(true), 5000);
-    try { const [p, c] = await Promise.all([api.get('/products'), api.get('/categories')]); setProducts(p); setCats(c); }
+    try { const [p, c] = await Promise.all([api.cachedGet('/products'), api.cachedGet('/categories')]); setProducts(p); setCats(c); }
     catch (e) { setErr(e.message); }
     finally { clearTimeout(t); setSlow(false); setLoading(false); }
   }, []);
-  useEffect(() => { if (user && !isAdmin) { loadCatalog(); api.get('/cart').then(setCart).catch(() => setCart({ items: [] })); } }, [user, isAdmin, loadCatalog]);
+  useEffect(() => { if (user && !isAdmin) { loadCatalog(); api.cachedGet('/cart', 5000).then(setCart).catch(() => setCart({ items: [] })); } }, [user, isAdmin, loadCatalog]);
   useEffect(() => { if (user) api.get('/auth/me').catch(() => {}); }, [user]);
 
   const signedIn = (res) => {

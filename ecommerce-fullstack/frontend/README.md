@@ -5,6 +5,10 @@ React 18 + Vite. Features: sign in / register, product browsing with search and 
 ## Configure
 Set one environment variable: `VITE_API_URL` = the public URL of your backend (for example `https://ecommerce-api.onrender.com`, no trailing slash).
 
+For integrations, also configure:
+- `VITE_STRIPE_PUBLISHABLE_KEY` — Stripe publishable key used for Google Pay.
+- `VITE_GOOGLE_MAPS_API_KEY` — Google Maps JavaScript API key used for the delivery map.
+
 ## Deploy on Vercel
 1. Push this folder to a GitHub repository (for example `ECommerce-Frontend`).
 2. Vercel -> Add New -> Project -> import the repository (Framework: Vite, auto-detected).

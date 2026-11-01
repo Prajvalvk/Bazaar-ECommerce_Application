@@ -8,6 +8,8 @@ Java 17 · Spring Boot 3.3 · Spring Data JPA · Hibernate · PostgreSQL · Mave
 | `DATABASE_URL` | `postgres://user:password@host:5432/dbname` (Render/Neon/Railway format) |
 | `DB_URL`, `DB_USER`, `DB_PASSWORD` | Alternative to `DATABASE_URL` (JDBC URL + credentials) |
 | `CORS_ORIGINS` | Optional, comma-separated frontend URLs (default: all) |
+| `STRIPE_SECRET_KEY` | Stripe secret key used to create and verify Google Pay PaymentIntents |
+| `STRIPE_PUBLISHABLE_KEY` | Stripe publishable key returned to the frontend |
 | `PORT` | Injected by the hosting platform |
 
 ## Deploy on Render

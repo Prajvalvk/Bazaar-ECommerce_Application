@@ -11,6 +11,14 @@ export const getToken = () => token;
 let onAuthFail = () => {};
 export const setAuthFailHandler = (f) => { onAuthFail = f; };
 
+const getCache = new Map();
+const inFlight = new Map();
+
+function invalidateGetCache() {
+  getCache.clear();
+  inFlight.clear();
+}
+
 async function req(path, method = 'GET', body) {
   const headers = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -28,11 +36,26 @@ async function req(path, method = 'GET', body) {
     const m = data && data.message;
     throw new Error(m && typeof m === 'object' ? Object.values(m).join(', ') : m || `Request failed (${res.status})`);
   }
+  if (method !== 'GET') invalidateGetCache();
   return data;
+}
+
+function cachedGet(path, ttl = 30000) {
+  const key = token ? token + ':' + path : path;
+  const cached = getCache.get(key);
+  if (cached && Date.now() - cached.time < ttl) return Promise.resolve(cached.value);
+  if (inFlight.has(key)) return inFlight.get(key);
+  const request = req(path).then((value) => {
+    getCache.set(key, { value, time: Date.now() });
+    return value;
+  }).finally(() => inFlight.delete(key));
+  inFlight.set(key, request);
+  return request;
 }
 
 export const api = {
   get: (p) => req(p),
+  cachedGet,
   post: (p, b) => req(p, 'POST', b),
   put: (p, b) => req(p, 'PUT', b),
   del: (p) => req(p, 'DELETE'),

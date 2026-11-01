@@ -4,8 +4,12 @@
   --display:'Bricolage Grotesque','Segoe UI',system-ui,sans-serif;
   --body:'Figtree','Segoe UI',system-ui,sans-serif;
 }
-*{box-sizing:border-box}
-html{scroll-behavior:smooth}
+*{
+  box-sizing:border-box
+}
+html{
+  scroll-behavior:smooth
+}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased}
 h1,h2,h3{font-family:var(--display);line-height:1.1;margin:0;letter-spacing:-.01em}
 p{margin:0}
@@ -65,6 +69,7 @@ nav button.on{background:var(--ink);color:#fff}
 @keyframes sk{to{background-position:-200% 0}}
 .media{position:relative;aspect-ratio:200/170}
 .tile{display:block;width:100%;height:100%}
+.product-image{object-fit:cover;background:#eef0f7}
 .price{position:absolute;right:12px;bottom:12px;background:var(--sun);color:var(--ink);font-family:var(--display);font-weight:800;padding:6px 12px;border:2px solid var(--ink);border-radius:10px;transform:rotate(-4deg);box-shadow:3px 3px 0 var(--ink)}
 .card-body{padding:16px 18px 18px;display:flex;flex-direction:column;gap:6px;flex:1}
 .card h3{font-size:1.2rem;font-weight:800}
@@ -72,6 +77,7 @@ nav button.on{background:var(--ink);color:#fff}
 .card .btn{margin-top:auto}
 
 /* notices + empty */
+.delivery-map{width:100%;height:260px;border-radius:14px;border:1.5px solid var(--line);margin-top:14px;background:#eef0f7}
 .notice{background:#fff7d6;border:1.5px solid #E6C95A;border-radius:14px;padding:14px 18px;margin-bottom:22px}
 .notice.bad{background:#ffe9e5;border-color:#F0A99F}
 .empty{background:#fff;border:1.5px dashed var(--line);border-radius:18px;padding:34px 24px;text-align:center;color:var(--ink2);display:grid;gap:8px;justify-items:center;margin-bottom:24px}
@@ -88,17 +94,21 @@ nav button.on{background:var(--ink);color:#fff}
 
 /* modal + drawer */
 .overlay{position:fixed;inset:0;background:rgba(14,19,48,.5);z-index:50;display:grid;place-items:center;padding:16px}
-.modal{position:relative;background:#fff;border-radius:22px;padding:28px;width:min(420px,100%);display:grid;gap:18px}
+.modal{position:relative;background:#fff;border-radius:22px;padding:28px;width:min(420px,100%);display:grid;gap:18px;max-height:92vh;overflow:auto}
+.modal.dragging,.drawer.dragging{user-select:none;cursor:grabbing}
+.drag-handle{cursor:grab;touch-action:none}
+.drag-handle:active{cursor:grabbing}
+.quantity-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(130px,.8fr);gap:12px}
 .modal h2{font-size:1.7rem;font-weight:800}
 .x{position:absolute;top:12px;right:14px;border:0;background:#eef0fa;border-radius:50%;width:34px;height:34px;font-size:1.4rem;line-height:1}
 .x.static{position:static;flex:none}
 .drawer-wrap{place-items:stretch end;padding:0}
-.drawer{background:#fff;width:min(460px,100vw);height:100%;display:flex;flex-direction:column;animation:slide .25s ease-out}
+.drawer{background:#fff;width:min(460px,100vw);height:100vh;height:100dvh;max-height:100vh;max-height:100dvh;display:flex;flex-direction:column;overflow:hidden;animation:slide .25s ease-out}
 @keyframes slide{from{transform:translateX(40px);opacity:0}to{transform:none;opacity:1}}
-.drawer-head{display:flex;justify-content:space-between;align-items:center;padding:20px 22px;border-bottom:1px solid var(--line)}
+.drawer-head{display:flex;justify-content:space-between;align-items:center;flex:none;padding:20px 22px;border-bottom:1px solid var(--line)}
 .drawer-head h2{font-size:1.6rem;font-weight:800}
-.drawer-body{flex:1;overflow:auto;padding:18px 22px}
-.drawer-foot{padding:16px 22px 20px;border-top:1px solid var(--line);display:grid;gap:10px}
+.drawer-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:18px 22px}
+.drawer-foot{flex:none;padding:16px 22px 20px;border-top:1px solid var(--line);display:grid;gap:10px;background:#fff}
 .sum{display:flex;justify-content:space-between;font-size:1.15rem}
 .line{display:grid;grid-template-columns:64px 1fr auto;gap:14px;align-items:start;padding:14px 0;border-bottom:1px solid var(--line)}
 .line-main{display:grid;gap:2px}

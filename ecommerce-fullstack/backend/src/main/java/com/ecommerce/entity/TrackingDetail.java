@@ -13,6 +13,14 @@ public class TrackingDetail {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long trackingId;
     @NotBlank(message = "status is required") private String status;
+    private Double latitude;
+    private Double longitude;
     @ManyToOne(optional = false) @JoinColumn(name = "order_no")
     private Order order;
+
+    public TrackingDetail(Long trackingId, String status, Order order) {
+        this.trackingId = trackingId;
+        this.status = status;
+        this.order = order;
+    }
 }

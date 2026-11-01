@@ -17,6 +17,7 @@ public class CheckoutService {
     private final CartService carts;
     private final CartRepository cartRepo;
     private final OrderService orders;
+    private final StripePaymentService stripePayments;
 
     @Transactional
     public Order checkout(User me, CheckoutRequest r) {
@@ -25,7 +26,12 @@ public class CheckoutService {
         List<OrderItemRequest> items = cart.getItems().stream()
                 .map(i -> new OrderItemRequest(i.getProduct().getProductId(), i.getQuantity()))
                 .collect(Collectors.toList());
-        Order o = orders.place(me, r.addressId(), r.paymentMethod(), items);
+        if ("GOOGLE_PAY".equalsIgnoreCase(r.paymentMethod().trim())) {
+            double total = cart.getItems().stream().mapToDouble(i -> i.getProduct().getPrice() * i.getQuantity()).sum();
+            stripePayments.verifyGooglePayIntent(r.paymentIntentId(), total);
+        }
+        String reference = "GOOGLE_PAY".equalsIgnoreCase(r.paymentMethod().trim()) ? r.paymentIntentId() : r.paymentReference();
+        Order o = orders.place(me, r.addressId(), r.paymentMethod(), items, r.upiId(), reference);
         cart.getItems().clear();
         cartRepo.save(cart);
         return o;

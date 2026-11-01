@@ -15,6 +15,8 @@ public class Payment {
     @NotBlank(message = "method is required") private String method;
     @NotNull(message = "amount is required") @Positive(message = "amount must be positive")
     private Double amount;
+    private String upiId;
+    private String paymentReference;
     @ManyToOne(optional = false) @JoinColumn(name = "user_id")
     private User user;
     @ManyToOne @JoinColumn(name = "order_no")

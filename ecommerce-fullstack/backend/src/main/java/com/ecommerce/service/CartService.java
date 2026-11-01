@@ -35,8 +35,11 @@ public class CartService {
         Cart cart = getOrCreate(userId);
         Product p = products.get(productId);
         if (p.getStatus() != ProductStatus.ACTIVE) throw ApiException.badRequest(p.getName() + " is not available right now");
+        if (p.getQuantity() == null || p.getQuantity() < 1) throw ApiException.badRequest(p.getName() + " is out of stock");
         Optional<CartItem> existing = find(cart, productId);
-        if (existing.isPresent()) existing.get().setQuantity(existing.get().getQuantity() + qty);
+        int nextQuantity = existing.isPresent() ? existing.get().getQuantity() + qty : qty;
+        if (p.getQuantity() == null || nextQuantity > p.getQuantity()) throw ApiException.badRequest("Only " + (p.getQuantity() == null ? 0 : p.getQuantity()) + " of " + p.getName() + " are available");
+        if (existing.isPresent()) existing.get().setQuantity(nextQuantity);
         else cart.getItems().add(new CartItem(null, cart, p, qty));
         return repo.save(cart);
     }
@@ -45,7 +48,11 @@ public class CartService {
     public Cart update(Long userId, Long productId, int qty) {
         Cart cart = getOrCreate(userId);
         CartItem item = find(cart, productId).orElseThrow(() -> ApiException.notFound("Product " + productId + " is not in the cart"));
-        if (qty <= 0) cart.getItems().remove(item); else item.setQuantity(qty);
+        if (qty <= 0) cart.getItems().remove(item); else {
+            Product p = item.getProduct();
+            if (p.getQuantity() == null || qty > p.getQuantity()) throw ApiException.badRequest("Only " + (p.getQuantity() == null ? 0 : p.getQuantity()) + " of " + p.getName() + " are available");
+            item.setQuantity(qty);
+        }
         return repo.save(cart);
     }
 
